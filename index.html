@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Ligne Étroite">
+  <meta name="theme-color" content="#0f1318">
+  <meta name="description" content="Simulateur de bus urbain dans des rues étroites européennes : 12, 15 et 18 m, volant tactile.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+  <title>Ligne Étroite</title>
+</head>
+<body>
+<div id="app">
+  <canvas id="cv"></canvas>
+
+  <!-- HUD de conduite -->
+  <div id="hud" class="hidden">
+    <div id="hud-tl">
+      <button id="btn-pause" class="round" aria-label="Pause">
+        <svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+      </button>
+      <div id="line-badge" class="panel"><span id="lb-num">1</span><span id="lb-dest"></span></div>
+      <div id="nav" class="panel hidden">
+        <svg id="nav-arrow" viewBox="0 0 40 40"><path id="nav-path" d=""/></svg>
+        <div><b id="nav-dist"></b><small id="nav-text"></small></div>
+      </div>
+      <div id="street" class="panel"></div>
+    </div>
+
+    <div id="hud-tr">
+      <div id="stop-card" class="panel">
+        <div class="sc-head"><span id="sc-label">Prochain arrêt</span><span id="sc-delta"></span></div>
+        <div id="sc-name"></div>
+        <div class="sc-row">
+          <span id="sc-dist"></span>
+          <span id="sc-wait"></span>
+        </div>
+        <span id="sc-req">ARRÊT DEMANDÉ</span>
+      </div>
+      <div id="map-col">
+        <canvas id="minimap"></canvas>
+        <div id="map-btns">
+          <button id="zoom-out" aria-label="Dézoomer">−</button>
+          <button id="btn-cam" aria-label="Caméra">
+            <svg viewBox="0 0 24 24"><path d="M12 3l4 8h-3v10h-2V11H8z"/></svg>
+          </button>
+          <button id="zoom-in" aria-label="Zoomer">+</button>
+        </div>
+      </div>
+    </div>
+
+
+    <div id="dash" class="panel">
+      <div id="spd"><b id="spd-v">0</b><small>km/h</small></div>
+      <div id="limit"><span id="limit-v">50</span></div>
+      <div id="dash-info">
+        <div id="pax"><svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M4 21c0-4.5 3.6-8 8-8s8 3.5 8 8z"/></svg><span id="pax-v">0</span></div>
+        <div id="comfort" title="Confort"><i id="comfort-bar"></i></div>
+      </div>
+      <div id="gear-ind">D</div>
+      <div id="door-ind" class="hidden">PORTES</div>
+    </div>
+
+    <div id="msgs"></div>
+  </div>
+
+  <!-- Commandes tactiles -->
+  <div id="controls" class="hidden">
+    <div id="left-btns">
+      <button id="blink-l" class="blink" aria-label="Clignotant gauche"><svg viewBox="0 0 24 24"><path d="M14 5l-8 7 8 7v-4h6V9h-6z"/></svg></button>
+      <button id="btn-horn" aria-label="Klaxon"><svg viewBox="0 0 24 24"><path d="M3 10v4h3l6 4V6L6 10zm13-2.5v9a5 5 0 000-9z"/></svg></button>
+      <button id="blink-r" class="blink" aria-label="Clignotant droit"><svg viewBox="0 0 24 24"><path d="M10 5l8 7-8 7v-4H4V9h6z"/></svg></button>
+    </div>
+    <div id="wheel-zone">
+      <div id="wheel-gauge"><i id="wheel-gauge-fill"></i><b></b></div>
+      <div id="wheel">
+        <svg viewBox="0 0 200 200">
+          <defs>
+            <radialGradient id="rimg" cx="40%" cy="35%" r="70%">
+              <stop offset="0" stop-color="#5b6068"/><stop offset="1" stop-color="#1c1f24"/>
+            </radialGradient>
+            <radialGradient id="hubg" cx="40%" cy="35%" r="70%">
+              <stop offset="0" stop-color="#4a4f57"/><stop offset="1" stop-color="#16181c"/>
+            </radialGradient>
+          </defs>
+          <circle cx="100" cy="100" r="86" fill="none" stroke="url(#rimg)" stroke-width="20"/>
+          <circle cx="100" cy="100" r="86" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
+          <g fill="url(#hubg)">
+            <path d="M28 92 Q60 84 76 88 L76 112 Q60 116 28 108z"/>
+            <path d="M172 92 Q140 84 124 88 L124 112 Q140 116 172 108z"/>
+            <path d="M88 124 L112 124 L110 178 L90 178z"/>
+          </g>
+          <circle cx="100" cy="100" r="30" fill="url(#hubg)" stroke="#2b2f35" stroke-width="3"/>
+          <circle cx="100" cy="100" r="13" fill="#2a2e34"/>
+          <rect x="94" y="8" width="12" height="22" rx="3" fill="#ffb300"/>
+        </svg>
+      </div>
+    </div>
+
+    <div id="right-panel">
+      <button id="btn-doors" aria-label="Portes">
+        <svg viewBox="0 0 24 24"><path d="M4 3h7v18H4zM13 3h7v18h-7z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 12h1M14 12h1" stroke="currentColor" stroke-width="2"/></svg>
+        <span>PORTES</span>
+      </button>
+      <div id="gears">
+        <button id="gear-D">D</button><button id="gear-N">N</button><button id="gear-R">R</button>
+      </div>
+    </div>
+    <div id="pedals">
+      <div id="brake" class="pedal"><i class="fill"></i><span>FREIN</span></div>
+      <div id="gas" class="pedal"><i class="fill"></i><span>ACCÉL.</span></div>
+    </div>
+  </div>
+
+  <!-- Écran titre -->
+  <section id="scr-title" class="screen">
+    <div class="title-wrap">
+      <div class="logo">
+        <div class="logo-badge">LÉ</div>
+        <div>
+          <h1>Ligne Étroite</h1>
+          <p>Simulateur de bus urbain — rues de centre-ville européen</p>
+        </div>
+      </div>
+      <div class="menu">
+        <button class="big primary" data-go="lines">Prendre son service</button>
+        <button class="big" data-go="free">Conduite libre</button>
+        <div class="row">
+          <button data-go="settings">Réglages</button>
+          <button data-go="help">Comment conduire</button>
+        </div>
+      </div>
+      <p class="hint" id="install-hint">Astuce : dans Safari, Partager → « Sur l’écran d’accueil » pour jouer en plein écran.</p>
+    </div>
+  </section>
+
+  <!-- Choix de la ligne -->
+  <section id="scr-lines" class="screen hidden">
+    <header><button class="back" data-go="title">‹</button><h2>Choisissez une ligne</h2></header>
+    <div id="line-list" class="cards"></div>
+  </section>
+
+  <!-- Choix du bus -->
+  <section id="scr-bus" class="screen hidden">
+    <header><button class="back" data-go="lines">‹</button><h2 id="bus-title">Choisissez votre bus</h2></header>
+    <div id="bus-list" class="cards"></div>
+  </section>
+
+  <!-- Pause -->
+  <section id="scr-pause" class="screen hidden dim">
+    <div class="box">
+      <h2>Pause</h2>
+      <button class="big primary" data-go="resume">Reprendre</button>
+      <button class="big" data-go="restart">Recommencer</button>
+      <div class="row"><button data-go="settings">Réglages</button><button data-go="help">Aide</button></div>
+      <button class="big danger" data-go="quit">Quitter le service</button>
+    </div>
+  </section>
+
+  <!-- Résultats -->
+  <section id="scr-results" class="screen hidden dim">
+    <div class="box wide">
+      <h2 id="res-title">Fin de service</h2>
+      <div id="res-stars"></div>
+      <div id="res-total"></div>
+      <div id="res-bars"></div>
+      <div id="res-details"></div>
+      <div class="row">
+        <button class="big primary" data-go="restart">Rejouer</button>
+        <button class="big" data-go="lines">Autres lignes</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Réglages -->
+  <section id="scr-settings" class="screen hidden">
+    <header><button class="back" data-go="back">‹</button><h2>Réglages</h2></header>
+    <div id="settings-list" class="settings"></div>
+  </section>
+
+  <!-- Aide -->
+  <section id="scr-help" class="screen hidden">
+    <header><button class="back" data-go="back">‹</button><h2>Comment conduire</h2></header>
+    <div class="help">
+      <div class="hcol">
+        <h3>Commandes</h3>
+        <p><b>Volant</b> : posez le pouce n’importe où sur le volant et tournez autour du centre. Il fait plusieurs tours, comme un vrai volant de bus ; la jauge au-dessus indique le braquage.</p>
+        <p><b>Pédales</b> : plus vous appuyez haut sur la pédale, plus l’effort est fort. Le bus avance au pas sans accélérer (boîte automatique).</p>
+        <p><b>D / N / R</b> : marche avant, neutre, marche arrière (à l’arrêt uniquement).</p>
+        <p><b>Portes</b> : à l’arrêt seulement. Le frein d’arrêt s’enclenche tant qu’elles sont ouvertes.</p>
+        <p><b>Clignotants</b> : à gauche en quittant un arrêt. Pincez l’écran pour zoomer.</p>
+      </div>
+      <div class="hcol">
+        <h3>Conduire un bus</h3>
+        <p><b>Porte-à-faux avant</b> : le nez du bus dépasse de près de 3 m devant les roues. Avancez loin dans le carrefour avant de braquer.</p>
+        <p><b>Porte-à-faux arrière</b> : en braquant, l’arrière balaie le côté opposé (jusqu’à 1 m sur le 15 m). Attention aux poteaux et potelets.</p>
+        <p><b>Roues arrière</b> : elles coupent le virage. Écartez-vous du trottoir intérieur.</p>
+        <p><b>Articulé</b> : la remorque suit encore plus à l’intérieur. Le soufflet ne dépasse pas 52°.</p>
+        <p><b>Aide trajectoire</b> : lignes jaunes = coins avant, bleues = coins arrière, orange = roue arrière intérieure.</p>
+      </div>
+      <div class="hcol">
+        <h3>Service</h3>
+        <p>Accostez parallèlement au trottoir, la porte avant au niveau du poteau jaune. Écart idéal : moins de 30 cm.</p>
+        <p>Desservez les arrêts où des voyageurs attendent ou quand l’arrêt est demandé. Un arrêt sans personne peut être sauté.</p>
+        <p>Respectez l’horaire, les feux, les limitations et le confort des voyageurs debout : pas de coups de frein ni de virages brusques.</p>
+      </div>
+    </div>
+  </section>
+
+  <div id="loading" class="screen"><div class="spinner"></div><p>Chargement de la ville…</p></div>
+  <div id="rotate"><svg viewBox="0 0 64 64"><rect x="20" y="8" width="24" height="44" rx="4" fill="none" stroke="#fff" stroke-width="3"/><path d="M48 46a18 18 0 01-14 10" fill="none" stroke="#ffb300" stroke-width="3"/><path d="M36 52l-3 4 5 2" fill="none" stroke="#ffb300" stroke-width="3"/></svg><p>Tournez votre téléphone en mode paysage</p></div>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
