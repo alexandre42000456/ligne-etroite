@@ -37,6 +37,8 @@ export class World {
     this.rand = rng(city.seed);
     this.nodes = new Map();
     this.edges = [];
+    this.dynamic = []; this.debris = []; this.touched = new Set(); this.dirty = []; this.levelObs = [];
+    this.name = city.name || 'Ville';
     this.buildGraph();
     this.computeJunctions();
     this.buildShapes();
@@ -301,8 +303,8 @@ export class World {
     for (const b of c.rband) if (inBand(x, y, b)) return MAT.ROAD;
     for (const d of c.rdisc) if ((x - d.x) ** 2 + (y - d.y) ** 2 < d.r2) return MAT.ROAD;
     for (const f of c.rfil) if (inFillet(x, y, f)) return MAT.ROAD;
-    for (const p of c.rpoly) if (inPoly(x, y, p)) return MAT.ROAD;
     for (const p of c.bpoly) if (inPoly(x, y, p)) return MAT.BUILDING;
+    for (const p of c.rpoly) if (inPoly(x, y, p)) return MAT.ROAD;
     for (const p of c.water) if (inPoly(x, y, p)) return MAT.WATER;
     for (const b of c.wband) if (inBand(x, y, b)) return MAT.WALK;
     for (const d of c.wdisc) if ((x - d.x) ** 2 + (y - d.y) ** 2 < d.r2) return MAT.WALK;
@@ -529,7 +531,7 @@ export class World {
       if (st.shelter) addB(st.shelter);
     }
     // feux
-    for (const s of this.signals) addC(s.head.x, s.head.y, 0.14, 'signal');
+    for (const s of this.signals) s.pole = addC(s.head.x, s.head.y, 0.14, 'signal');
     // potelets
     for (const b of this.city.bollards || []) {
       const F = this.edgeBetween(b.edge[0], b.edge[1]);
@@ -625,9 +627,161 @@ export class World {
     });
   }
 
+  // ---------------------------------------------------------------- objets mobiles
+  // mobilier renversé, voitures poussées, obstacles propres à un niveau
+  obBB(o) {
+    if (o.r !== undefined) return { minx: o.x - o.r, miny: o.y - o.r, maxx: o.x + o.r, maxy: o.y + o.r };
+    const ex = Math.abs(o.ux) * o.hl + Math.abs(o.uy) * o.hw, ey = Math.abs(o.uy) * o.hl + Math.abs(o.ux) * o.hw;
+    o.bb = { minx: o.cx - ex, miny: o.cy - ey, maxx: o.cx + ex, maxy: o.cy + ey };
+    return o.bb;
+  }
+  gridAdd(o) {
+    const b = this.obBB(o), g = this.ogrid;
+    g.forRange(b.minx, b.miny, b.maxx, b.maxy, (ix) => (g.cells[ix] ||= []).push(o));
+  }
+  gridRemove(o) {
+    const b = o.r !== undefined ? this.obBB(o) : o.bb || this.obBB(o), g = this.ogrid;
+    g.forRange(b.minx - 0.5, b.miny - 0.5, b.maxx + 0.5, b.maxy + 0.5, (ix) => {
+      const c = g.cells[ix];
+      if (!c) return;
+      const k = c.indexOf(o);
+      if (k >= 0) c.splice(k, 1);
+    });
+  }
+  markDirty(b, pad = 1.5) {
+    this.dirty.push({ minx: b.minx - pad, miny: b.miny - pad, maxx: b.maxx + pad, maxy: b.maxy + pad });
+  }
+  touch(o) {
+    if (o._orig) return;
+    o._orig = o.r !== undefined ? { x: o.x, y: o.y } : { cx: o.cx, cy: o.cy, ux: o.ux, uy: o.uy };
+    this.touched.add(o);
+  }
+  // objet renversé : il quitte la grille de collision et devient un débris
+  knock(o, vx, vy) {
+    if (o.down) return;
+    this.touch(o);
+    const b = this.obBB(o);
+    o.down = true;
+    if (o.inGrid !== false) this.gridRemove(o);
+    const x = o.r !== undefined ? o.x : o.cx, y = o.r !== undefined ? o.y : o.cy;
+    const sp = Math.hypot(vx, vy);
+    const light = o.kind === 'cone';
+    const ang = sp > 0.05 ? Math.atan2(vy, vx) + (Math.random() - 0.5) * 0.6 : Math.random() * Math.PI * 2;
+    this.debris.push({
+      kind: o.kind, o, x, y, ang, len: { lamp: 6, signal: 3.2, stoppole: 2.4 }[o.kind] || 0,
+      vx: light ? vx : vx * 0.12, vy: light ? vy : vy * 0.12, va: (Math.random() - 0.5) * (light ? 8 : 1.5),
+      color: o.color, hl: o.hl, hw: o.hw, cang: o.ux !== undefined ? Math.atan2(o.uy, o.ux) : 0, t: 0,
+    });
+    if (!o.level) this.markDirty(b, 2);
+  }
+  // impulsion sur une voiture (stationnée ou du trafic)
+  push(o, jx, jy, px, py, mass) {
+    if (!o.dyn) {
+      this.touch(o);
+      o.dyn = true; o.vx = o.vx || 0; o.vy = o.vy || 0; o.w = 0;
+      this.dynamic.push(o);
+      if (o.inGrid !== false && !o.level) this.markDirty(this.obBB(o), 1);
+    }
+    o.vx += jx / mass; o.vy += jy / mass;
+    const rx = px - o.cx, ry = py - o.cy;
+    const I = (mass * (4 * o.hl * o.hl + 4 * o.hw * o.hw)) / 12;
+    o.w += clamp((rx * jy - ry * jx) / I, -3, 3);
+    o.blocked = false;
+  }
+  stepDynamic(dt) {
+    const solidAt = (x, y) => { const m = this.material(x, y); return m === MAT.BUILDING || m === MAT.WATER; };
+    for (const o of this.dynamic) {
+      if (o.removed) continue;
+      const sp = Math.hypot(o.vx, o.vy);
+      if (sp < 0.02 && Math.abs(o.w) < 0.02) { o.vx = o.vy = o.w = 0; continue; }
+      const dec = 6.5 * dt; // roues freinées
+      if (sp > 0) { const k = Math.max(0, sp - dec) / sp; o.vx *= k; o.vy *= k; }
+      o.w *= Math.max(0, 1 - 3.5 * dt);
+      const prev = { cx: o.cx, cy: o.cy, ux: o.ux, uy: o.uy };
+      const inGrid = o.inGrid !== false;
+      if (inGrid) this.gridRemove(o);
+      o.cx += o.vx * dt; o.cy += o.vy * dt;
+      const a = o.w * dt, c = Math.cos(a), s = Math.sin(a);
+      const ux = o.ux * c - o.uy * s, uy = o.ux * s + o.uy * c;
+      o.ux = ux; o.uy = uy;
+      this.obBB(o);
+      let hit = false;
+      for (const [lx, ly] of [[1, 1], [1, -1], [-1, 1], [-1, -1], [1, 0], [-1, 0]]) {
+        const x = o.cx + o.ux * o.hl * lx - o.uy * o.hw * ly, y = o.cy + o.uy * o.hl * lx + o.ux * o.hw * ly;
+        if (solidAt(x, y)) { hit = true; break; }
+      }
+      if (!hit) {
+        this.queryObstacles(o.bb.minx, o.bb.miny, o.bb.maxx, o.bb.maxy, (q) => {
+          if (hit || q === o || q.down) return;
+          const ov = q.r !== undefined ? obbCircle(o, q.x, q.y, q.r) : obbOverlap(o, q);
+          if (!ov) return;
+          if (q.kind === 'car' && !q.level) {
+            // réaction en chaîne : la voiture percutée part à son tour
+            this.push(q, o.vx * 650, o.vy * 650, (o.cx + q.cx) / 2, (o.cy + q.cy) / 2, 1300);
+            o.vx *= 0.5; o.vy *= 0.5;
+          }
+          hit = true;
+        });
+      }
+      if (hit) {
+        Object.assign(o, prev);
+        this.obBB(o);
+        if (Math.hypot(o.vx, o.vy) < 0.4) o.blocked = true;
+        o.vx *= -0.1; o.vy *= -0.1; o.w = 0;
+      }
+      if (inGrid) this.gridAdd(o);
+    }
+    this.dynamic = this.dynamic.filter((o) => !o.removed);
+    for (const d of this.debris) {
+      d.t += dt;
+      const sp = Math.hypot(d.vx, d.vy);
+      if (sp > 0) {
+        const k = Math.max(0, sp - (d.kind === 'cone' ? 2.5 : 6) * dt) / sp;
+        d.vx *= k; d.vy *= k;
+        const nx = d.x + d.vx * dt, ny = d.y + d.vy * dt;
+        if (solidAt(nx, ny)) { d.vx *= -0.3; d.vy *= -0.3; } else { d.x = nx; d.y = ny; }
+      }
+      d.ang += d.va * dt;
+      d.va *= Math.max(0, 1 - 2 * dt);
+    }
+  }
+  // remet en place tout ce qui a été bougé (nouvelle partie)
+  resetDynamic() {
+    for (const o of this.touched) {
+      const inGrid = !o.down && o.inGrid !== false;
+      if (inGrid) this.gridRemove(o);
+      const b0 = this.obBB(o);
+      Object.assign(o, o._orig);
+      o._orig = null;
+      o.down = false; o.dyn = false; o.blocked = false; o.vx = o.vy = o.w = 0;
+      if (o.inGrid !== false && !o.removedLevel) this.gridAdd(o);
+      if (!o.level) { this.markDirty(b0, 8); this.markDirty(this.obBB(o), 1); }
+    }
+    this.touched.clear();
+    this.dynamic.length = 0;
+    this.debris.length = 0;
+  }
+  // obstacles propres à un niveau (plots, bus garés…)
+  setLevelObstacles(list = []) {
+    for (const o of this.levelObs) { if (!o.down) this.gridRemove(o); o.removedLevel = true; }
+    this.levelObs = [];
+    for (const d of list) {
+      let o;
+      if (d.type === 'cone') o = { x: d.p[0], y: d.p[1], r: 0.25, kind: 'cone' };
+      else {
+        const th = d.th ?? 0;
+        const size = { car: [4.3, 1.78], parkedbus: [12, 2.55], trailer: [13.6, 2.55] }[d.type] || [4, 2];
+        o = { cx: d.p[0], cy: d.p[1], ux: Math.cos(th), uy: Math.sin(th), hl: size[0] / 2, hw: size[1] / 2, kind: d.type, color: d.color || '#7f8c8d' };
+      }
+      o.level = true;
+      this.gridAdd(o);
+      this.levelObs.push(o);
+    }
+  }
+
   // ---------------------------------------------------------------- marquages
   buildMarkings() {
-    const M = (this.markings = { dashes: [], zebras: [], stoplines: [], parking: [], stopzones: [], giveway: [] });
+    const M = (this.markings = { dashes: [], zebras: [], stoplines: [], parking: [], stopzones: [], giveway: [], paint: this.city.paint || [] });
     for (const e of this.edges) {
       if (e.center && e.w >= 6) {
         const pl = e.line;

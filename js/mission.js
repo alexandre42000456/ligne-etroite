@@ -1,5 +1,6 @@
 // Service de la ligne : arrêts, passagers, horaire, accostage, pénalités et score
-import { clamp, wrapAngle, segIntersect, DEG } from './geom.js';
+import { clamp, wrapAngle, DEG } from './geom.js';
+import { newScore, trackIncidents, safetyScore } from './incidents.js';
 
 const PED_COLORS = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#1abc9c', '#e67e22', '#ecf0f1', '#34495e', '#d35400', '#27ae60', '#c0392b', '#7f8c8d'];
 
@@ -31,10 +32,7 @@ export class Mission {
       if (k > 0) t += (st.s - line.stops[k - 1].s) / v + (k > 1 ? 18 : 0);
       this.schedule.push(Math.round(t));
     });
-    this.sc = {
-      collisions: 0, scrapes: 0, curbs: 0, red: 0, speeding: 0, missed: 0, doorsOut: 0, early: 0, noBlink: 0,
-      punct: [], dock: [], comfort: 100, left: 0,
-    };
+    this.sc = newScore();
     this.hitCool = 0; this.curbCool = 0; this.offT = 0;
     this.doorsWasOpen = false;
     this.doorPenalized = false;
@@ -91,68 +89,21 @@ export class Mission {
 
   update(dt, bus, ev, world, sigTime) {
     this.time += dt;
-    if (this.hitCool > 0) this.hitCool -= dt;
-    if (this.curbCool > 0) this.curbCool -= dt;
     for (const m of this.msgs) m.t -= dt;
     this.msgs = this.msgs.filter((m) => m.t > 0);
     const L = this.line, path = L.path;
 
     // progression le long de l'itinéraire (avant du bus)
     const f = bus.front;
-    const pr = this.time <= dt ? path.project(f.x, f.y, 0, 120) : path.project(f.x, f.y, this.s, 30);
-    if (pr.dist < 9) { this.s = pr.s; this.offT = 0; this.off = false; }
-    else { this.offT += dt; this.off = this.offT > 1.2; }
-    if (this.off && this.offT > 1.2 && this.offT - dt <= 1.2) this.say('Hors itinéraire ! Revenez sur le tracé', 'warn', 3);
-
-    // rue et limitation
-    const e = world.streetAt(f.x, f.y);
-    if (e) { this.speedLimit = e.speed; this.street = e.name; }
-    if (bus.kmh > this.speedLimit + 4) {
-      this.sc.speeding += dt;
-      if (!this.speedWarn) { this.say(`Excès de vitesse : ${this.speedLimit} km/h`, 'warn'); this.speedWarn = true; }
-    } else this.speedWarn = false;
-
-    // incidents
-    if (ev.hit && ev.hit.kind !== 'artic') {
-      if (this.hitCool <= 0 && ev.hitSpeed > 0.25) {
-        const hard = ev.hitSpeed > 2.8;
-        if (hard) this.sc.collisions++; else this.sc.scrapes++;
-        this.sc.comfort -= hard ? 12 : 4;
-        const what = { wall: 'un mur', mirror: 'le rétroviseur', car: 'une voiture garée', traffic: 'une voiture', tree: 'un arbre', lamp: 'un lampadaire', bollard: 'un potelet', stoppole: 'un poteau d’arrêt', signal: 'un feu', shelter: 'un abribus', fountain: 'la fontaine', statue: 'la statue' }[ev.hit.kind] || 'un obstacle';
-        this.say(`${hard ? 'Collision' : 'Accrochage'} : ${what} !`, 'bad', 2.8);
-        this.hitCool = 1.0;
-        this.lastHit = { x: ev.hit.x, y: ev.hit.y, t: 0.6 };
-      }
-    } else if (ev.hit && ev.hit.kind === 'artic' && this.hitCool <= 0) {
-      this.say('Angle d’articulation maximal', 'warn');
-      this.hitCool = 1.5;
+    if (!this.free) {
+      const pr = this.time <= dt ? path.project(f.x, f.y, 0, 120) : path.project(f.x, f.y, this.s, 30);
+      if (pr.dist < 9) { this.s = pr.s; this.offT = 0; this.off = false; }
+      else { this.offT += dt; this.off = this.offT > 1.2; }
+      if (this.off && this.offT > 1.2 && this.offT - dt <= 1.2) this.say('Hors itinéraire ! Revenez sur le tracé', 'warn', 3);
     }
-    if (ev.curb > 0 && this.curbCool <= 0) {
-      this.sc.curbs++;
-      this.sc.comfort -= 1.5 + Math.min(6, bus.kmh * 0.25);
-      this.say('Roue sur le trottoir', 'warn', 1.8);
-      this.curbCool = 1.0;
-    }
-    // confort : accélérations
-    const ex = Math.max(0, Math.abs(bus.acc) - 1.7) + Math.max(0, Math.abs(bus.latAcc) - 1.9);
-    if (ex > 0 && !ev.hit) this.sc.comfort -= ex * dt * (2 + this.onboard.length * 0.08);
-    this.sc.comfort = Math.max(0, this.sc.comfort);
-    this.discomfort = ex;
 
-    // feux rouges
-    if (this.lastFront) {
-      for (const sig of world.signals) {
-        const Ln = sig.line;
-        if (Math.abs(Ln.ax - f.x) > 20 || Math.abs(Ln.ay - f.y) > 20) continue;
-        if (!segIntersect(this.lastFront.x, this.lastFront.y, f.x, f.y, Ln.ax, Ln.ay, Ln.bx, Ln.by)) continue;
-        const mv = (f.x - this.lastFront.x) * sig.ux + (f.y - this.lastFront.y) * sig.uy;
-        if (mv > 0 && world.signalState(sig, sigTime) === 'R') {
-          this.sc.red++;
-          this.say('Feu rouge grillé !', 'bad', 3);
-        }
-      }
-    }
-    this.lastFront = { x: f.x, y: f.y };
+    trackIncidents(this, dt, bus, ev, world, sigTime);
+    if (this.wrecked && !this.finished) { this.finish(); return; }
 
     if (this.free) return;
     // clignotant gauche en quittant l'arrêt
@@ -351,7 +302,7 @@ export class Mission {
     const sc = this.sc;
     const pf = (d) => (d >= -20 && d <= 45 ? 100 : d < -20 ? clamp(100 - (-20 - d) * 1.2, 0, 100) : clamp(100 - (d - 45) * 0.5, 0, 100));
     const punct = sc.punct.length ? sc.punct.reduce((a, d) => a + pf(d), 0) / sc.punct.length : 100;
-    const safety = clamp(100 - sc.collisions * 12 - sc.scrapes * 5 - sc.curbs * 2 - sc.red * 15 - sc.speeding * 1.2, 0, 100);
+    const safety = safetyScore(sc);
     const dock = sc.dock.length ? sc.dock.reduce((a, b) => a + b, 0) / sc.dock.length : 50;
     const service = clamp(dock - sc.missed * 25 - sc.doorsOut * 8 - sc.early * 10 - sc.noBlink * 3, 0, 100);
     const comfort = clamp(sc.comfort, 0, 100);

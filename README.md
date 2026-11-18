@@ -21,6 +21,18 @@ optimisée pour l'iPhone 17 Pro en paysage et installable sur l'écran d'accueil
 - **Ville de 780 × 560 m** : boulevard, avenues, giratoire à cinq branches avec anneau franchissable,
   rues résidentielles avec stationnement, vieille ville pavée (chaussées de 4,2 à 5,6 m) et la Porte Saint-Jean (3,80 m).
 - **Circulation** : voitures qui respectent feux et priorités, s'arrêtent devant le bus et laissent place dans les ruelles.
+- **Collisions réalistes** : un contact léger et rasant frotte (étincelles, ralentissement, rayures), un choc franc
+  arrête le véhicule avec un léger rebond et des dégâts proportionnels à l'énergie ; les plots se renversent, les
+  lampadaires, poteaux d'arrêt, feux et abribus cèdent au-delà d'une certaine vitesse, les voitures sont poussées
+  selon le rapport des masses (et peuvent en percuter d'autres), les rétroviseurs se cassent. Jauge de dégâts :
+  à 100 %, le véhicule est hors d'usage.
+- **10 défis** : parcours étroits chronométrés au centre de formation (slalom de plots, couloir de 5,90 m entre murs,
+  marche arrière au dépôt, épingle, porte de 3,60 m, mini-giratoire, chicane à potelets, mise à quai d'une
+  semi-remorque) et deux défis en vieille ville avec la circulation. Étoiles et records par défi.
+- **Conduite libre** avec choix du véhicule (bus 12, 15, 18 m ou semi-remorque de 16,5 m / 13 m) et changement de
+  véhicule en cours de route (bouton sous le numéro de ligne, ou dans le menu pause).
+- **Clavier entièrement réaffectable** (Réglages → Clavier) : deux touches par action, repérées par leur position
+  physique (W A S D devient Z Q S D sur un clavier AZERTY).
 - **Score** : sécurité, service, ponctualité, confort des voyageurs debout ; record par ligne et par bus.
 
 ## Jouer en local
@@ -29,8 +41,9 @@ optimisée pour l'iPhone 17 Pro en paysage et installable sur l'écran d'accueil
 python3 tools/serve.py
 ```
 
-Puis ouvrir http://localhost:8765. Au clavier (pour tester sur ordinateur) : flèches (ou W/A/S/D), espace = frein,
-`F`/`N`/`R` = rapport, `O` = portes, `Q`/`E` = clignotants, `H` = klaxon, `P` = pause.
+Puis ouvrir http://localhost:8765. Touches par défaut (modifiables dans les réglages) : flèches ou Z Q S D, espace = frein
+d'urgence, `C` = recentrer le volant, `F`/`N`/`R` = rapport, `O` = portes, `A`/`E` = clignotants, `H` = klaxon,
+`V` = caméra, `B` = changer de véhicule (conduite libre), `Échap` ou `P` = pause (libellés pour un clavier AZERTY).
 
 ## Publier sur GitHub Pages
 
@@ -61,6 +74,7 @@ cinématique de chaque bus (porte-à-faux, rétroviseurs, remorque) pour prouver
 
 ```bash
 node tools/plan.mjs --write   # met aussi à jour js/feasibility.js (bus interdits par ligne)
+node tools/challenges.mjs     # chaque défi, plots compris ; les marches arrière sont vérifiées par réversibilité
 node tools/e2e.mjs 4          # service complet d'une ligne : accostages, voyageurs, score
 node tools/sim.mjs            # pilote automatique naïf (montre où un débutant accroche)
 ```
@@ -73,8 +87,10 @@ Résultat actuel : toutes les lignes sont faisables avec le bus conseillé ; le 
 | Fichier | Rôle |
 |---|---|
 | `js/city.js` | Données de la ville : nœuds, rues (largeur, trottoirs, sens unique, stationnement), arrêts, lignes |
+| `js/training.js`, `js/challenges.js` | Centre de formation et définition des défis |
+| `js/challenge.js`, `js/incidents.js` | Déroulement d'un défi ; incidents de conduite communs (chocs, frottements, feux…) |
 | `js/world.js` | Géométrie analytique (congés de bordure, giratoire), matériaux, obstacles, voies, itinéraires |
-| `js/bus.js` | Gabarits des bus, physique, collisions |
+| `js/bus.js` | Gabarits des véhicules (bus et semi-remorques), physique, contacts et dégâts |
 | `js/mapRenderer.js` | Rendu de la ville en tuiles mises en cache (toits, ombres portées, marquages) |
 | `js/render.js` | Caméra, bus, trafic, piétons, guidage, aide trajectoire |
 | `js/controls.js` | Volant, pédales, boutons, clavier |

@@ -39,8 +39,13 @@ export class Sound {
     // klaxon
     this.hornG = c.createGain(); this.hornG.gain.value = 0;
     const hl = c.createBiquadFilter(); hl.type = 'lowpass'; hl.frequency.value = 1600;
-    for (const f of [311, 392]) { const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.connect(hl); o.start(); }
+    this.hornOsc = [311, 392].map((f) => { const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.connect(hl); o.start(); return o; });
     hl.connect(this.hornG); this.hornG.connect(this.master);
+    // frottement de carrosserie
+    const sn = c.createBufferSource(); sn.buffer = this.noise; sn.loop = true;
+    this.scrBp = c.createBiquadFilter(); this.scrBp.type = 'bandpass'; this.scrBp.frequency.value = 2200; this.scrBp.Q.value = 0.9;
+    this.scrG = c.createGain(); this.scrG.gain.value = 0;
+    sn.connect(this.scrBp); this.scrBp.connect(this.scrG); this.scrG.connect(this.master); sn.start();
     this.t = 0;
   }
 
@@ -64,6 +69,8 @@ export class Sound {
     this.eng.gain.setTargetAtTime(on ? 0.11 + thr * 0.16 : 0, now, 0.1);
     this.ng.gain.setTargetAtTime(on ? 0.02 + thr * 0.05 * (rpm / 2000) : 0, now, 0.1);
     this.bp.frequency.setTargetAtTime(500 + rpm * 0.9, now, 0.1);
+    this.scrG.gain.setTargetAtTime(on ? bus.scrape * 0.28 : 0, now, 0.03);
+    this.scrBp.frequency.setTargetAtTime(1400 + Math.abs(bus.v) * 260, now, 0.05);
     const rev = on && bus.gear === 'R' && (this.t % 0.9) < 0.45;
     this.beepG.gain.setTargetAtTime(rev ? 0.06 : 0, now, 0.01);
     // clignotant
@@ -109,6 +116,21 @@ export class Sound {
   bell() { this.tone(1568, 0.6, 0.18, 'sine'); this.tone(3136, 0.4, 0.05, 'sine'); }
   crash(k) { this.burst(0.35, 900, 0.8, 0.5 * k); this.tone(70, 0.3, 0.6 * k, 'sine', 0, 0.5); }
   curb() { this.tone(85, 0.18, 0.5, 'sine', 0, 0.6); this.burst(0.12, 400, 1, 0.12); }
+  setVehicle(T) {
+    if (!this.hornOsc) return;
+    const f = T.kind === 'semi' ? [196, 247] : [311, 392];
+    this.hornOsc.forEach((o, i) => o.frequency.setValueAtTime(f[i], this.ctx.currentTime));
+  }
+  knock(kind) {
+    if (kind === 'shelter') {
+      this.burst(0.5, 5200, 0.7, 0.35, 'highpass');
+      for (let i = 0; i < 6; i++) this.tone(2600 + Math.random() * 2600, 0.12, 0.05, 'sine', i * 0.04);
+    } else if (kind === 'cone') {
+      this.tone(160, 0.12, 0.25, 'triangle'); this.burst(0.08, 700, 1, 0.08);
+    } else {
+      this.tone(520, 0.7, 0.12, 'square', 0, 0.85); this.tone(1046, 0.5, 0.06, 'sine'); this.burst(0.25, 1800, 0.8, 0.2);
+    }
+  }
   horn(on) { if (this.hornG) this.hornG.gain.setTargetAtTime(on ? 0.12 : 0, this.ctx.currentTime, 0.02); }
   ui() { this.tone(1200, 0.06, 0.06, 'triangle'); }
   error() { this.tone(220, 0.18, 0.12, 'square'); }

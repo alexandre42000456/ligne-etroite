@@ -128,7 +128,7 @@ export class MapRenderer {
       const c = this.cache.get(k);
       if (c) { c.used = this.frame; continue; }
       if (made > 0 && performance.now() - t0 > budget) break;
-      this.cache.set(k, { cv: this.render(ix, iy), used: this.frame });
+      this.cache.set(k, { cv: this.render(ix, iy), used: this.frame, ix, iy });
       made++;
     }
     if (this.cache.size > this.maxChunks) {
@@ -141,6 +141,17 @@ export class MapRenderer {
       }
     }
     return made;
+  }
+
+  // efface les tuiles touchées par un changement (mobilier renversé, voiture poussée…)
+  invalidate(b) {
+    for (const [k, v] of this.cache) {
+      const x0 = v.ix * CS, y0 = v.iy * CS;
+      if (b.maxx >= x0 - MARGIN && b.minx <= x0 + CS + MARGIN && b.maxy >= y0 - MARGIN && b.miny <= y0 + CS + MARGIN) {
+        this.cache.delete(k);
+        this.pool.push(v.cv);
+      }
+    }
   }
 
   pat(ctx, name) {
@@ -266,6 +277,16 @@ export class MapRenderer {
     x.setLineDash([0.55, 0.4]); x.lineWidth = 0.28;
     for (const s of M.giveway) { if (inBB(Math.min(s.ax, s.bx), Math.min(s.ay, s.by), Math.max(s.ax, s.bx), Math.max(s.ay, s.by))) { x.beginPath(); x.moveTo(s.ax, s.ay); x.lineTo(s.bx, s.by); x.stroke(); } }
     x.setLineDash([]);
+    // peintures au sol (places, quais)
+    for (const pt of M.paint) {
+      const xs = pt.pts.map((q) => q[0]), ys = pt.pts.map((q) => q[1]);
+      if (!inBB(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys))) continue;
+      x.strokeStyle = pt.color; x.lineWidth = pt.w; x.setLineDash(pt.dash || []);
+      x.beginPath(); x.moveTo(pt.pts[0][0], pt.pts[0][1]);
+      for (const q of pt.pts) x.lineTo(q[0], q[1]);
+      x.stroke();
+    }
+    x.setLineDash([]);
     // arrêts de bus : zigzag jaune + « BUS »
     for (const st of M.stopzones) {
       if (!inBB(st.pole.x - 30, st.pole.y - 30, st.pole.x + 30, st.pole.y + 30)) continue;
@@ -290,12 +311,12 @@ export class MapRenderer {
     const W = this.world;
     // voitures stationnées
     for (const c of W.parked) {
-      if (!inBB(c.bb.minx, c.bb.miny, c.bb.maxx, c.bb.maxy)) continue;
+      if (c.dyn || c.down || !inBB(c.bb.minx, c.bb.miny, c.bb.maxx, c.bb.maxy)) continue;
       drawCar(x, c.cx, c.cy, Math.atan2(c.uy, c.ux), c.hl * 2, c.hw * 2, c.color, false);
     }
     // abris
     for (const b of W.boxes) {
-      if (b.kind !== 'shelter' || !inBB(b.bb.minx, b.bb.miny, b.bb.maxx, b.bb.maxy)) continue;
+      if (b.kind !== 'shelter' || b.down || b.dyn || !inBB(b.bb.minx, b.bb.miny, b.bb.maxx, b.bb.maxy)) continue;
       x.save(); x.translate(b.cx, b.cy); x.rotate(Math.atan2(b.uy, b.ux));
       x.fillStyle = 'rgba(0,0,0,0.25)'; x.fillRect(-b.hl + 0.3, -b.hw + 0.4, b.hl * 2, b.hw * 2);
       x.fillStyle = '#9fb7c4'; x.fillRect(-b.hl, -b.hw, b.hl * 2, b.hw * 2);
@@ -304,7 +325,7 @@ export class MapRenderer {
       x.restore();
     }
     for (const o of W.circles) {
-      if (!inBB(o.x - 3, o.y - 3, o.x + 3, o.y + 3)) continue;
+      if (o.down || o.level || !inBB(o.x - 3, o.y - 3, o.x + 3, o.y + 3)) continue;
       switch (o.kind) {
         case 'bollard':
           x.fillStyle = '#2b2b2b'; circle(x, o.x, o.y, o.r); x.fill();
@@ -530,6 +551,11 @@ function specialBuilding(b, p) {
     const cx = bb.minx + w * 0.62, cy = bb.miny + h * 0.38;
     b.strokeStyle = '#f1f1f1'; b.lineWidth = 0.8; circle(b, cx, cy, 8); b.stroke();
     b.fillStyle = '#e53935'; b.fillRect(cx - 1.4, cy - 5, 2.8, 10); b.fillRect(cx - 5, cy - 1.4, 10, 2.8);
+  } else if (p.style === 'dock') {
+    b.fillStyle = '#a7a39b'; b.fill(); b.clip();
+    b.fillStyle = '#f5c400';
+    for (let yy = bb.miny; yy < bb.maxy; yy += 1.2) b.fillRect(bb.minx, yy, w, 0.6);
+    b.fillStyle = '#2b2b2b'; b.fillRect(bb.minx, bb.maxy - 0.6, w, 0.6);
   } else if (p.style === 'tower') {
     b.fillStyle = '#9a8f80'; b.fill(); b.clip();
     const cx = (bb.minx + bb.maxx) / 2, cy = (bb.miny + bb.maxy) / 2;
@@ -586,8 +612,8 @@ export function drawCar(x, cx, cy, ang, L, Wd, color, lights, brake = false, bli
     x.fillRect(-L / 2 + 0.02, -Wd / 2 + 0.15, 0.12, 0.38); x.fillRect(-L / 2 + 0.02, Wd / 2 - 0.53, 0.12, 0.38);
     if (blink) {
       x.fillStyle = '#ffae00';
-      const yy = blink < 0 ? -Wd / 2 - 0.05 : Wd / 2 - 0.25;
-      x.fillRect(L / 2 - 0.4, yy, 0.35, 0.3); x.fillRect(-L / 2 + 0.05, yy, 0.35, 0.3);
+      const sides = blink === 2 ? [-Wd / 2 - 0.05, Wd / 2 - 0.25] : [blink < 0 ? -Wd / 2 - 0.05 : Wd / 2 - 0.25];
+      for (const yy of sides) { x.fillRect(L / 2 - 0.4, yy, 0.35, 0.3); x.fillRect(-L / 2 + 0.05, yy, 0.35, 0.3); }
     }
   }
   x.restore();

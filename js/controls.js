@@ -1,6 +1,50 @@
 // Commandes : volant tactile (rotation cumulée multi-tours), pédales analogiques, boutons, clavier
 import { clamp, DEG, wrapAngle } from './geom.js';
 
+// actions du clavier et touches par défaut (codes physiques : W A S D = Z Q S D sur AZERTY)
+export const KEY_ACTIONS = [
+  ['throttle', 'Accélérer', ['ArrowUp', 'KeyW']],
+  ['brake', 'Freiner', ['ArrowDown', 'KeyS']],
+  ['emergency', 'Freinage d’urgence', ['Space', '']],
+  ['left', 'Tourner à gauche', ['ArrowLeft', 'KeyA']],
+  ['right', 'Tourner à droite', ['ArrowRight', 'KeyD']],
+  ['center', 'Recentrer le volant', ['KeyC', '']],
+  ['gearD', 'Marche avant (D)', ['KeyF', '']],
+  ['gearN', 'Point mort (N)', ['KeyN', '']],
+  ['gearR', 'Marche arrière (R)', ['KeyR', '']],
+  ['doors', 'Portes', ['KeyO', '']],
+  ['blinkL', 'Clignotant gauche', ['KeyQ', '']],
+  ['blinkR', 'Clignotant droit', ['KeyE', '']],
+  ['horn', 'Klaxon', ['KeyH', '']],
+  ['camera', 'Changer de caméra', ['KeyV', '']],
+  ['zoomIn', 'Zoomer', ['Equal', 'NumpadAdd']],
+  ['zoomOut', 'Dézoomer', ['Minus', 'NumpadSubtract']],
+  ['vehicle', 'Changer de véhicule (libre)', ['KeyB', '']],
+  ['pause', 'Pause', ['Escape', 'KeyP']],
+];
+export const defaultKeys = () => Object.fromEntries(KEY_ACTIONS.map(([a, , k]) => [a, [...k]]));
+
+// libellés : appris en direct (disposition réelle du clavier), sinon déduits du code
+const LABELS = (() => { try { return JSON.parse(localStorage.getItem('le.keylabels')) || {}; } catch (e) { return {}; } })();
+const NAMED = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Space: 'Espace', Escape: 'Échap', Enter: 'Entrée', Backspace: '⌫', Tab: 'Tab', ShiftLeft: 'Maj g.', ShiftRight: 'Maj d.', ControlLeft: 'Ctrl g.', ControlRight: 'Ctrl d.', AltLeft: 'Alt g.', AltRight: 'Alt d.', MetaLeft: '⌘ g.', MetaRight: '⌘ d.', Equal: '=', Minus: '-', NumpadAdd: 'Pavé +', NumpadSubtract: 'Pavé -' };
+export function rememberLabel(e) {
+  if (!e.code || !e.key || e.key.length !== 1 || LABELS[e.code] === e.key.toUpperCase()) return;
+  LABELS[e.code] = e.key.toUpperCase();
+  try { localStorage.setItem('le.keylabels', JSON.stringify(LABELS)); } catch (_) { /* facultatif */ }
+}
+export function keyLabel(code) {
+  if (!code) return '—';
+  if (LABELS[code]) return LABELS[code];
+  if (NAMED[code]) return NAMED[code];
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  if (code.startsWith('Numpad')) return 'Pavé ' + code.slice(6);
+  return code;
+}
+if (typeof navigator !== 'undefined' && navigator.keyboard && navigator.keyboard.getLayoutMap) {
+  navigator.keyboard.getLayoutMap().then((m) => { for (const [code, key] of m) if (!LABELS[code] && key.length === 1) LABELS[code] = key.toUpperCase(); }).catch(() => {});
+}
+
 export class Controls {
   constructor(settings, cb) {
     this.settings = settings;
@@ -133,40 +177,54 @@ export class Controls {
     cv.addEventListener('pointercancel', pu);
   }
 
+  // correspondance touche physique (code) → action
+  keyMap() {
+    if (this._mapSrc === this.settings.keys) return this._map;
+    const m = new Map();
+    for (const [act, codes] of Object.entries(this.settings.keys)) for (const c of codes) if (c) m.set(c, act);
+    this._mapSrc = this.settings.keys;
+    this._map = m;
+    return m;
+  }
+
   bindKeys() {
     window.addEventListener('keydown', (e) => {
+      if (this.capture) return; // réaffectation en cours dans les réglages
+      rememberLabel(e);
+      const act = this.keyMap().get(e.code);
+      if (!act) return;
+      if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+      e.preventDefault();
       if (e.repeat) return;
-      const k = e.key.toLowerCase();
-      this.keys.add(k);
-      if (k === 'o') this.cb.doors();
-      if (k === 'q') this.cb.blink(-1);
-      if (k === 'e') this.cb.blink(1);
-      if (k === 'f') this.cb.gear('D');
-      if (k === 'n') this.cb.gear('N');
-      if (k === 'r') this.cb.gear('R');
-      if (k === 'h') this.cb.horn(true);
-      if (k === 'escape' || k === 'p') this.cb.pause();
-      if (k === '+' || k === '=') this.cb.zoom(1.15);
-      if (k === '-') this.cb.zoom(1 / 1.15);
-      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+      this.keys.add(act);
+      const once = {
+        doors: () => this.cb.doors(), blinkL: () => this.cb.blink(-1), blinkR: () => this.cb.blink(1),
+        gearD: () => this.cb.gear('D'), gearN: () => this.cb.gear('N'), gearR: () => this.cb.gear('R'),
+        horn: () => this.cb.horn(true), pause: () => this.cb.pause(), zoomIn: () => this.cb.zoom(1.15),
+        zoomOut: () => this.cb.zoom(1 / 1.15), camera: () => this.cb.camera(), center: () => { this.wheel = 0; },
+        vehicle: () => this.cb.vehicle && this.cb.vehicle(),
+      }[act];
+      if (once) once();
     });
     window.addEventListener('keyup', (e) => {
-      const k = e.key.toLowerCase();
-      this.keys.delete(k);
-      if (k === 'h') this.cb.horn(false);
+      const act = this.keyMap().get(e.code);
+      if (!act) return;
+      this.keys.delete(act);
+      if (act === 'horn') this.cb.horn(false);
     });
+    window.addEventListener('blur', () => { this.keys.clear(); this.cb.horn(false); });
   }
 
   // appelé à chaque image
   update(dt, bus) {
     const K = this.keys;
-    const left = K.has('arrowleft') || K.has('a'), right = K.has('arrowright') || K.has('d');
+    const left = K.has('left'), right = K.has('right');
     if (left || right) {
       this.wheel = clamp(this.wheel + (right ? 1 : -1) * 420 * dt, -this.maxWheel, this.maxWheel);
     }
-    const up = K.has('arrowup') || K.has('w'), down = K.has('arrowdown') || K.has('s') || K.has(' ');
+    const up = K.has('throttle'), down = K.has('brake') || K.has('emergency');
     this.kThr = clamp(this.kThr + (up ? 1.6 : -4) * dt, 0, 1);
-    this.kBrk = clamp(this.kBrk + (down ? (K.has(' ') ? 8 : 1.8) : -5) * dt, 0, 1);
+    this.kBrk = clamp(this.kBrk + (down ? (K.has('emergency') ? 8 : 1.8) : -5) * dt, 0, 1);
     // retour du volant lorsqu'il est lâché (proportionnel à la vitesse)
     if (!this.held && !left && !right && this.settings.autoCenter) {
       const rate = Math.abs(bus.v) * 32;

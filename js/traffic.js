@@ -15,7 +15,10 @@ export class Traffic {
     this.lanes = world.lanes.filter((l) => l.line.len > 12 && (l.e.oneway || l.e.w >= 5.5));
   }
 
-  reset() { this.cars.length = 0; }
+  reset() {
+    for (const c of this.cars) c.obb.removed = true;
+    this.cars.length = 0;
+  }
 
   pickNext(lane) {
     const opts = lane.conns.filter((c) => c.turn !== 'U' && c.to.line.len > 6);
@@ -41,8 +44,9 @@ export class Traffic {
         id: this.nextId++, lane, seg: lane.line, onConn: null, s, v: 5 + this.R() * 4,
         L, W: 1.78, color: COLORS[(this.R() * COLORS.length) | 0], factor: 0.85 + this.R() * 0.25,
         next: this.pickNext(lane), wait: 0, ignoreCars: 0, ghost: false, fade: 1, braking: false, blink: 0,
-        obb: { cx: p.x, cy: p.y, ux: p.ux, uy: p.uy, hl: L / 2, hw: 0.89 },
+        obb: { cx: p.x, cy: p.y, ux: p.ux, uy: p.uy, hl: L / 2, hw: 0.89, inGrid: false, kind: 'traffic' },
       };
+      car.obb.car = car;
       this.place(car);
       this.cars.push(car);
       return car;
@@ -108,12 +112,14 @@ export class Traffic {
 
   update(dt, bus, t, view) {
     this.spawnT -= dt;
-    if (this.spawnT <= 0 && this.cars.length < this.max) {
+    if (this.lanes.length && this.spawnT <= 0 && this.cars.length < this.max) {
       this.spawn(bus, view);
       this.spawnT = 0.6;
     }
     for (const c of this.cars) {
       if (c.ghost) { c.fade -= dt / 2.5; continue; }
+      // voiture percutée : elle subit la physique (monde) et reste immobilisée, feux de détresse
+      if (c.obb.dyn) { c.crashed = true; c.v = 0; c.braking = true; c.blink = 2; c.crashT = (c.crashT || 0) + dt; continue; }
       if (c.ignoreCars > 0) c.ignoreCars -= dt;
       const lim = (c.onConn ? (c.onConn.turn === 'S' ? c.lane.speed : c.onConn.turn === 'O' ? 22 : 15) : c.lane.speed) / 3.6;
       let vT = lim * c.factor;
@@ -166,12 +172,12 @@ export class Traffic {
     }
     // retrait
     this.cars = this.cars.filter((c) => {
-      if (c.ghost && c.fade <= 0) return false;
+      if (c.ghost && c.fade <= 0) { c.obb.removed = true; return false; }
       const d = Math.hypot(c.obb.cx - bus.x, c.obb.cy - bus.y);
       const visible = view && Math.hypot(c.obb.cx - view.x, c.obb.cy - view.y) < view.r;
-      if (d > 260) return false;
-      if (c.wait > 25 && !visible) return false;
-      return true;
+      const gone = d > 260 || (c.wait > 25 && !visible) || (c.crashed && c.crashT > 30 && !visible);
+      if (gone) c.obb.removed = true;
+      return !gone;
     });
   }
 }
